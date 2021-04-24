@@ -15,6 +15,7 @@ use ctl_tree::*;
 use cursive::traits::*;
 use cursive::views::*;
 use cursive::Cursive;
+use cursive::CursiveExt;
 use cursive_tree_view::{Placement, TreeView};
 use simplelog::*;
 use sysctl::*;
@@ -33,7 +34,8 @@ Up/Down:    Navigate tree or scroll textview.
 Tab:        Toggle focus between tree and details.
 Enter:      Expand/collapse tree or view selected sysctl.
 'e':        Edit value in selected sysctl.
-'s':        Search sysctl by name (coming soon).
+'s':        Search sysctl by name.
+'c':        Clear search.
 'q':        Quit program.
 ";
 
@@ -61,12 +63,9 @@ fn main() {
         }
     }
 
-    let mut tree = TreeView::<TreeEntry>::new();
-
-    // Scope this so temporary variables gets released
-    {
-        let root: Vec<TreeEntry> = CTLTREE.contents("");
-
+    fn populate_tree(tree: &mut TreeView<TreeEntry>, path: &str) {
+        tree.clear();
+        let root: Vec<TreeEntry> = CTLTREE.contents(path);
         let mut i = 0;
         for e in root {
             i = tree
@@ -75,10 +74,13 @@ fn main() {
         }
     }
 
+    let mut tree = TreeView::<TreeEntry>::new();
+    populate_tree(&mut tree, "");
+
     tree.set_on_collapse(|siv: &mut Cursive, row, is_collapsed, children| {
         if !is_collapsed && children == 0 {
             // Expand entry
-            siv.call_on_id("tree", move |tree: &mut TreeView<TreeEntry>| {
+            siv.call_on_name("tree", move |tree: &mut TreeView<TreeEntry>| {
                 let path: String = tree.borrow_item(row).expect("borrow item from tree").path();
                 expand_tree(tree, row, &path);
             });
@@ -87,13 +89,13 @@ fn main() {
 
     tree.set_on_submit(|siv: &mut Cursive, row| {
         let e: TreeEntry = siv
-            .call_on_id("tree", move |tree: &mut TreeView<TreeEntry>| {
+            .call_on_name("tree", move |tree: &mut TreeView<TreeEntry>| {
                 tree.borrow_item(row)
                     .expect("borrow item from tree")
                     .clone()
             })
             .expect("call on id");
-        siv.call_on_id("text", move |text: &mut TextView| {
+        siv.call_on_name("text", move |text: &mut TextView| {
             if let Some(ctl) = e.ctl {
                 if let (Ok(n), Ok(v), Ok(vt), Ok(d)) =
                     (ctl.name(), ctl.value(), ctl.value_type(), ctl.description())
@@ -110,13 +112,45 @@ fn main() {
         });
     });
 
+    // Clear search and show all items
+    fn clear(siv: &mut Cursive) {
+        CTLTREE.filter(None);
+        siv.call_on_name("tree", move |tree: &mut TreeView<TreeEntry>| {
+            populate_tree(tree, "");
+        });
+    }
+
+    // Show search dialog
+    fn search(siv: &mut Cursive) {
+        siv.add_layer(
+            Dialog::new()
+                .title("Enter search string")
+                .padding(cursive::view::Margins::lrtb(1, 1, 1, 0))
+                .content(
+                    EditView::new()
+                        .on_submit(move |siv: &mut Cursive, s: &str| {
+                            info!("Search editview submit '{}'", s);
+                            siv.pop_layer();
+                            CTLTREE.filter(Some(s.to_string()));
+                            siv.call_on_name("tree", move |tree: &mut TreeView<TreeEntry>| {
+                                populate_tree(tree, "");
+                            });
+                        })
+                        .with_name("search"),
+                )
+                .button("Cancel", |siv| {
+                    siv.pop_layer();
+                }),
+        );
+    }
+
     fn edit(siv: &mut Cursive) {
         if let Some(row) = siv
-            .call_on_id("tree", move |tree: &mut TreeView<TreeEntry>| tree.row())
-            .expect("call_on_id")
+            .call_on_name("tree", move |tree: &mut TreeView<TreeEntry>| tree.row())
+            .expect("call_on_name")
         {
             let e: TreeEntry = siv
-                .call_on_id("tree", move |tree: &mut TreeView<TreeEntry>| {
+                .call_on_name("tree", move |tree: &mut TreeView<TreeEntry>| {
                     tree.borrow_item(row)
                         .expect("borrow item from tree")
                         .clone()
@@ -126,7 +160,7 @@ fn main() {
                 if let (Ok(old_value), Ok(value_type)) = (ctl.value_string(), ctl.value_type()) {
                     // Update textview
                     let ctl2 = ctl.clone();
-                    siv.call_on_id("text", move |text: &mut TextView| {
+                    siv.call_on_name("text", move |text: &mut TextView| {
                         if let (Ok(n), Ok(v), Ok(d)) =
                             (ctl2.name(), ctl2.value(), ctl2.description())
                         {
@@ -155,7 +189,7 @@ fn main() {
                         Dialog::new()
                             .title("Enter new value")
                             // Padding is (left, right, top, bottom)
-                            .padding((1, 1, 1, 0))
+                            .padding(cursive::view::Margins::lrtb(1, 1, 1, 0))
                             .content(
                                 EditView::new()
                                     .content(old_value)
@@ -166,7 +200,7 @@ fn main() {
                                                 siv.pop_layer();
                                                 // Update textview
                                                 let ctl2 = ctl.clone();
-                                                siv.call_on_id(
+                                                siv.call_on_name(
                                                     "text",
                                                     move |text: &mut TextView| {
                                                         if let (Ok(n), Ok(v), Ok(d)) = (
@@ -210,9 +244,9 @@ fn main() {
                                                 );
                                                 Ok("dummy".to_owned())
                                             });
-                                        info!("EditView submit");
+                                        info!("Edit editview submit");
                                     })
-                                    .with_id("edit"),
+                                    .with_name("edit"),
                             )
                             .button("Cancel", |siv| {
                                 siv.pop_layer();
@@ -236,11 +270,19 @@ fn main() {
     let mut siv = Cursive::default();
     siv.add_global_callback('q', |s| s.quit());
     siv.add_global_callback('e', |s| edit(s));
+    siv.add_global_callback('s', |s| search(s));
+    siv.add_global_callback('c', |s| clear(s));
     siv.add_layer(
         Dialog::around(
             LinearLayout::horizontal()
-                .child(tree.with_id("tree").min_width(38))
-                .child(TextView::new(USAGE).with_id("text").scrollable()),
+                .child(PaddedView::new(
+                    cursive::view::Margins::lrtb(1, 1, 1, 1),
+                    tree.with_name("tree").min_width(38).scrollable(),
+                ))
+                .child(PaddedView::new(
+                    cursive::view::Margins::lrtb(1, 1, 1, 1),
+                    TextView::new(USAGE).with_name("text").scrollable(),
+                )),
         )
         .title("The sysctl explorer")
         .full_screen(),
