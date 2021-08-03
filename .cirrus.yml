@@ -1,0 +1,63 @@
+test: &TEST
+  cargo_cache:
+    folder: $CARGO_HOME/registry
+  build_script:
+    - . $HOME/.cargo/env || true
+    - cargo build --all --all-targets
+  test_script:
+    - . $HOME/.cargo/env || true
+    - cargo test --all
+  before_cache_script: rm -rf $CARGO_HOME/registry/index
+
+task:
+  matrix:
+    - name: FreeBSD 12
+      freebsd_instance:
+        image: freebsd-12-2-release-amd64
+    - name: FreeBSD 11
+      freebsd_instance:
+        image: freebsd-11-4-release-amd64
+  install_script: |
+    pkg install -y curl
+    curl https://sh.rustup.rs -sSf | sh -s -- -y
+  << : *TEST
+
+task:
+  name: OSX
+  macos_instance:
+    image: catalina-base
+  install_script: |
+    curl https://sh.rustup.rs -sSf | sh -s -- -y
+  << : *TEST
+
+task:
+  name: Linux
+  container:
+    image: rust:latest
+  << : *TEST
+  target_cache:
+    folder: target
+    fingerprint_script:
+      - rustc --version
+
+task:
+  name: nightly
+  depends_on:
+    - FreeBSD 11
+    - FreeBSD 12
+    - OSX
+    - Linux
+  container:
+    image: rustlang/rust:nightly
+  cargo_cache:
+    folder: $CARGO_HOME/registry
+  build_script: cargo build --all
+  test_script: cargo test --all
+  target_cache:
+    folder: target
+    fingerprint_script:
+      - rustc --version
+  minver_test_script:
+    - cargo update -Zminimal-versions
+    - cargo check --all-targets
+  before_cache_script: rm -rf $CARGO_HOME/registry/index
